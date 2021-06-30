@@ -20,9 +20,6 @@ void input_data(){
         }
     }
 }
-unsigned fetch(unsigned pos){
-    return ((unsigned)mem[pos+3] << 24) + ((unsigned)mem[pos+2] << 16) + ((unsigned)mem[pos+1] << 8) + (unsigned)mem[pos];
-}
 void run() {
     pc = 0;
     for (; ; ){

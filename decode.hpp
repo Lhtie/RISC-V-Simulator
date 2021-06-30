@@ -52,6 +52,9 @@ void type_R(unsigned x, unsigned &rd, unsigned &rs1, unsigned &rs2){
     rs1 = get(x, 15, 19);
     rs2 = get(x, 20, 24);
 }
+unsigned fetch(unsigned pos){
+    return ((unsigned)mem[pos+3] << 24) + ((unsigned)mem[pos+2] << 16) + ((unsigned)mem[pos+1] << 8) + (unsigned)mem[pos];
+}
 void decode(unsigned command){
     unsigned opcode = get(command, 0, 6), imm, rd, rs1, rs2;
     switch (opcode) {
