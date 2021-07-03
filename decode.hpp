@@ -5,9 +5,9 @@
 #include "hex.hpp"
 using namespace std;
 
-extern unsigned reg[32];
-extern unsigned char mem[500000];
-extern unsigned pc;
+enum optype{lb, lh, lw, lbu, lhu, sb, sh, sw, lui, auipc, jal, jalr, beq, bne,
+        blt, bge, bltu, bgeu, addi, slti, sltiu, xori, ori, andi, slli, srli,
+        srai, add, sub, sll, slt, sltu, xor_, srl, sra, or_, and_};
 
 void type_U(unsigned x, unsigned &rd, unsigned &imm){
     rd = get(x, 7, 11);
@@ -52,181 +52,69 @@ void type_R(unsigned x, unsigned &rd, unsigned &rs1, unsigned &rs2){
     rs1 = get(x, 15, 19);
     rs2 = get(x, 20, 24);
 }
-unsigned fetch(unsigned pos){
-    return ((unsigned)mem[pos+3] << 24) + ((unsigned)mem[pos+2] << 16) + ((unsigned)mem[pos+1] << 8) + (unsigned)mem[pos];
-}
-void decode(unsigned command){
-    unsigned opcode = get(command, 0, 6), imm, rd, rs1, rs2;
+void decode(unsigned command, optype &op, unsigned &imm, unsigned &rd, unsigned &rs1, unsigned &rs2){
+    unsigned opcode = get(command, 0, 6);
     switch (opcode) {
-        case 55: {
-            type_U(command, rd, imm);
-            reg[rd] = imm;
-            pc += 4;
-            break;
-        }
-        case 23: {
-            type_U(command, rd, imm);
-            reg[rd] = pc + imm;
-            pc += 4;
-            break;
-        }
-        case 111: {
-            type_J(command, rd, imm);
-            if (rd) reg[rd] = pc + 4;
-            pc += imm;
-            break;
-        }
-        case 103: {
-            type_I(command, rd, rs1, imm);
-            unsigned t = pc + 4;
-            pc = (reg[rs1] + imm) & ~1;
-            if (rd) reg[rd] = t;
-            break;
-        }
-        case 99: {
+        case 55: type_U(command, rd, imm), op = lui; break;
+        case 23: type_U(command, rd, imm), op = auipc; break;
+        case 111: type_J(command, rd, imm), op = jal; break;
+        case 103: type_I(command, rd, rs1, imm), op = jalr; break;
+        case 99:
             type_B(command, imm, rs1, rs2);
-            unsigned funct3 = get(command, 12, 14);
-            switch (funct3) {
-                case 0: {
-                    if (reg[rs1] == reg[rs2]) pc += imm; else pc += 4;
-                    break;
-                }
-                case 1: {
-                    if (reg[rs1] != reg[rs2]) pc += imm; else pc += 4;
-                    break;
-                }
-                case 4: {
-                    if ((signed)reg[rs1] < (signed)reg[rs2]) pc += imm; else pc += 4;
-                    break;
-                }
-                case 5: {
-                    if ((signed)reg[rs1] >= (signed)reg[rs2]) pc += imm; else pc += 4;
-                    break;
-                }
-                case 6: {
-                    if (reg[rs1] < reg[rs2]) pc += imm; else pc += 4;
-                    break;
-                }
-                case 7: {
-                    if (reg[rs1] >= reg[rs2]) pc += imm; else pc += 4;
-                    break;
-                }
-                default: break;
+            switch (get(command, 12, 14)) {
+                case 0: op = beq; break;
+                case 1: op = bne; break;
+                case 4: op = blt; break;
+                case 5: op = bge; break;
+                case 6: op = bltu; break;
+                case 7: op = bgeu; break;
             }
             break;
-        }
-        case 3: {
+        case 3:
             type_I(command, rd, rs1, imm);
-            unsigned funct3 = get(command, 12, 14);
-            switch (funct3) {
-                case 0: {
-                    reg[rd] = sext((unsigned)mem[reg[rs1] + imm], 8);
-                    break;
-                }
-                case 1: {
-                    unsigned pos = reg[rs1] + imm;
-                    reg[rd] = sext(((unsigned)mem[pos+1] << 8) + (unsigned)mem[pos], 16);
-                    break;
-                }
-                case 2: {
-                    unsigned pos = reg[rs1] + imm;
-                    reg[rd] = ((unsigned)mem[pos+3] << 24) + ((unsigned)mem[pos+2] << 16) + ((unsigned)mem[pos+1] << 8) + (unsigned)mem[pos];
-                    break;
-                }
-                case 4: {
-                    reg[rd] = (unsigned)mem[reg[rs1] + imm];
-                    break;
-                }
-                case 5: {
-                    unsigned pos = reg[rs1] + imm;
-                    reg[rd] = ((unsigned)mem[pos+1] << 8) + (unsigned)mem[pos];
-                    break;
-                }
-                default: break;
+            switch (get(command, 12, 14)) {
+                case 0: op = lb; break;
+                case 1: op = lh; break;
+                case 2: op = lw; break;
+                case 4: op = lbu; break;
+                case 5: op = lhu; break;
             }
-            pc += 4;
             break;
-        }
-        case 35: {
+        case 35:
             type_S(command, imm, rs1, rs2);
-            unsigned funct3 = get(command, 12, 14);
-            switch (funct3) {
-                case 0: {
-                    mem[reg[rs1] + imm] = (unsigned char)get(reg[rs2], 0, 7);
-                    break;
-                }
-                case 1: {
-                    unsigned pos = reg[rs1] + imm;
-                    mem[pos] = (unsigned char)get(reg[rs2], 0, 7), mem[pos+1] = (unsigned char)get(reg[rs2], 8, 15);
-                    break;
-                }
-                case 2: {
-                    unsigned pos = reg[rs1] + imm;
-                    mem[pos] = (unsigned char)get(reg[rs2], 0, 7);
-                    mem[pos+1] = (unsigned char)get(reg[rs2], 8, 15);
-                    mem[pos+2] = (unsigned char)get(reg[rs2], 16, 23);
-                    mem[pos+3] = (unsigned char)get(reg[rs2], 24, 31);
-                    break;
-                }
-                default: break;
+            switch (get(command, 12, 14)) {
+                case 0: op = sb; break;
+                case 1: op = sh; break;
+                case 2: op = sw; break;
             }
-            pc += 4;
             break;
-        }
-        case 19: {
+        case 19:
             type_I(command, rd, rs1, imm);
-            unsigned funct3 = get(command, 12, 14);
-            switch (funct3) {
-                case 0: reg[rd] = reg[rs1] + imm; break;
-                case 2: reg[rd] = (signed)reg[rs1] < (signed)imm; break;
-                case 3: reg[rd] = reg[rs1] < imm; break;
-                case 4: reg[rd] = reg[rs1] ^ imm; break;
-                case 6: reg[rd] = reg[rs1] | imm; break;
-                case 7: reg[rd] = reg[rs1] & imm; break;
-                case 1: {
-                    unsigned shamt = get(imm, 0, 4);
-                    reg[rd] = reg[rs1] << shamt;
-                    break;
-                }
-                case 5: {
-                    unsigned shamt = get(imm, 0, 4);
-                    if (!get(imm, 10, 10)){
-                        reg[rd] = reg[rs1] >> shamt;
-                    } else {
-                        reg[rd] = sext(reg[rs1] >> shamt, 32 - shamt);
-                    }
-                }
-                default: break;
+            switch (get(command, 12, 14)) {
+                case 0: op = addi; break;
+                case 2: op = slti; break;
+                case 3: op = sltiu; break;
+                case 4: op = xori; break;
+                case 6: op = ori; break;
+                case 7: op = andi; break;
+                case 1: op = slli; break;
+                case 5: op = (imm >> 10) ? srai : srli; break;
             }
-            pc += 4;
             break;
-        }
-        case 51: {
+        case 51:
             type_R(command, rd, rs1, rs2);
-            unsigned funct3 = get(command, 12, 14), funct7 = get(command, 25, 31);
-            switch (funct3) {
-                case 0: {
-                    if (funct7 >> 5) reg[rd] = reg[rs1] - reg[rs2];
-                    else reg[rd] = reg[rs1] + reg[rs2];
-                    break;
-                }
-                case 1: reg[rd] = reg[rs1] << get(reg[rs2], 0, 4); break;
-                case 2: reg[rd] = (signed)reg[rs1] < (signed)reg[rs2]; break;
-                case 3: reg[rd] = reg[rs1] < reg[rs2]; break;
-                case 4: reg[rd] = reg[rs1] ^ reg[rs2]; break;
-                case 5: {
-                    unsigned shamt = get(reg[rs2], 0, 4);
-                    if (funct7 >> 5) reg[rd] = sext(reg[rs1] >> shamt, 32 - shamt);
-                    else reg[rd] = reg[rs1] >> shamt;
-                }
-                case 6: reg[rd] = reg[rs1] | reg[rs2]; break;
-                case 7: reg[rd] = reg[rs1] & reg[rs2]; break;
-                default: break;
+            switch (get(command, 12, 14)) {
+                case 0: op = (get(command, 25, 31) >> 5) ? sub : add; break;
+                case 1: op = sll; break;
+                case 2: op = slt; break;
+                case 3: op = sltu; break;
+                case 4: op = xor_; break;
+                case 5: op = (get(command, 25, 31) >> 5) ? sra : srl; break;
+                case 6: op = or_; break;
+                case 7: op = and_; break;
             }
-            pc += 4;
             break;
-        }
-        default: pc += 4, cout << "Error" << endl; break;
+        default: break;
     }
 }
 

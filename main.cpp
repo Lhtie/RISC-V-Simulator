@@ -1,8 +1,7 @@
 #include <iostream>
-#include "decode.hpp"
+#include "tomasulo.hpp"
 using namespace std;
 
-unsigned reg[32];
 unsigned char mem[500000];
 unsigned pc;
 
@@ -20,18 +19,11 @@ void input_data(){
         }
     }
 }
-void run() {
-    pc = 0;
-    for (; ; ){
-        unsigned command = fetch(pc);
-        if (command == 267388179) break;
-        decode(command);
-    }
-    cout << (reg[10] & 255u) << endl;
-}
 
 int main() {
+    freopen("./data/tak.data", "r", stdin);
+//    freopen("output.txt", "w", stdout);
     input_data();
-    run();
+    tomasulo();
     return 0;
 }

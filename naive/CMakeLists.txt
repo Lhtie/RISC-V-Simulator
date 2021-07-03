@@ -3,4 +3,4 @@ project(code)
 
 set(CMAKE_CXX_STANDARD 14)
 
-add_executable(code main.cpp hex.hpp decode.hpp tomasulo.hpp execute.hpp)
+add_executable(code main.cpp hex.hpp decode.hpp)
