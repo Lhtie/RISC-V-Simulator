@@ -21,8 +21,6 @@ void input_data(){
 }
 
 int main() {
-    freopen("./data/tak.data", "r", stdin);
-//    freopen("output.txt", "w", stdout);
     input_data();
     tomasulo();
     return 0;

@@ -4,7 +4,7 @@
 #include "decode.hpp"
 #include "execute.hpp"
 
-const int N_reg = 32, N_fq =  32, N_rs = 32, N_rob = 32, N_slb = 32;
+const int N_reg = 32, N_fq = 32, N_rs = 32, N_rob = 32, N_slb = 32;
 extern unsigned char mem[500000];
 extern unsigned pc;
 
@@ -25,6 +25,7 @@ bool stall_ex_to_rs = true;
 bool stall_ex_to_slb = true;
 bool stall_rob_to_commit = true;
 bool stall_commit_to_regfile = true;
+bool stall_commit_to_slb = true;
 bool stall_slb_to_rob_prev = true;
 bool stall_slb_to_rob_nxt = true;
 bool stall_slb_to_rs_prev = true;
@@ -128,8 +129,10 @@ struct rob_to_commit_type{
 
 struct commit_to_regfile_type{
     optype op;
-    unsigned rd, res;
+    unsigned rob_id, rd, res;
 } commit_to_regfile;
+
+struct commit_to_slb_type{ unsigned slb_id; } commit_to_slb;
 
 unsigned fetch(unsigned pos){
     return ((unsigned)mem[pos+3] << 24) + ((unsigned)mem[pos+2] << 16) + ((unsigned)mem[pos+1] << 8) + (unsigned)mem[pos];
@@ -181,7 +184,7 @@ void run_issue(){
     3. 对于 Load/Store指令，将指令分解后发到SLBuffer(需注意SLBUFFER也该是个先进先出的队列实现)
     tips: 考虑边界问题（是否还有足够的空间存放下一条指令）
     */
-    stall_issue_to_fetch = stall_issue_to_rs = stall_issue_to_rob = stall_issue_to_slb = stall_issue_to_rob = stall_issue_to_regfile = true;
+    stall_issue_to_fetch = stall_issue_to_rs = stall_issue_to_rob = stall_issue_to_slb = stall_issue_to_regfile = true;
     if (!stall_fetch_to_issue) {
         stall_issue_to_fetch = false;
         issue_to_fetch = true;
@@ -228,18 +231,8 @@ void run_regfile(){
         if (commit_to_regfile.op <= lhu || commit_to_regfile.op >= lui) {
             if (commit_to_regfile.rd) {
                 reg_nxt[commit_to_regfile.rd].reg = commit_to_regfile.res;
-                reg_nxt[commit_to_regfile.rd].tag = 0;
-            }
-        } else {
-            unsigned pos = commit_to_regfile.rd, v2 = commit_to_regfile.res;
-            switch (commit_to_regfile.op) {
-                case sb: mem[pos] = (unsigned char)get(v2, 0, 7); break;
-                case sh: mem[pos] = (unsigned char)get(v2, 0, 7), mem[pos+1] = (unsigned char)get(v2, 8, 15); break;
-                case sw:
-                    mem[pos] = (unsigned char)get(v2, 0, 7), mem[pos+1] = (unsigned char)get(v2, 8, 15);
-                    mem[pos+2] = (unsigned char)get(v2, 16, 23), mem[pos+3] = (unsigned char)get(v2, 24, 31);
-                    break;
-                default: break;
+                if (reg_prev[commit_to_regfile.rd].tag == commit_to_regfile.rob_id)
+                    reg_nxt[commit_to_regfile.rd].tag = 0;
             }
         }
     }
@@ -391,7 +384,7 @@ void run_slbuffer(){
         }
     }
     if (!stall_ex_to_slb){
-        for (unsigned i = slb_prev.head; i != slb_prev.tail; i = i % N_slb + 1){
+        for (unsigned i = slb_prev.head, cnt = 1; cnt <= slb_prev.size; i = i % N_slb + 1, ++cnt){
             if (slb_prev[i].q1 == ex_to_slb.rob_id)
                 slb_nxt[i].q1 = 0, slb_nxt[i].v1 = ex_to_slb.res;
             if (slb_prev[i].q2 == ex_to_slb.rob_id)
@@ -399,19 +392,23 @@ void run_slbuffer(){
         }
     }
     if (!stall_slb_to_slb_prev){
-        for (unsigned i = slb_prev.head; i != slb_prev.tail; i = i % N_slb + 1){
+        for (unsigned i = slb_prev.head, cnt = 1; cnt <= slb_prev.size; i = i % N_slb + 1, ++cnt){
             if (slb_prev[i].q1 == slb_to_slb_prev.rob_id)
                 slb_nxt[i].q1 = 0, slb_nxt[i].v1 = slb_to_slb_prev.res;
             if (slb_prev[i].q2 == slb_to_slb_prev.rob_id)
                 slb_nxt[i].q2 = 0, slb_nxt[i].v2 = slb_to_slb_prev.res;
         }
     }
+    if (!stall_commit_to_slb){
+        slb_nxt[commit_to_slb.slb_id].rob_id = 0;
+        slb_nxt[commit_to_slb.slb_id].time--;
+    }
     stall_slb_to_rob_nxt = stall_slb_to_rs_nxt = stall_slb_to_slb_nxt = true;
     if (slb_prev.size){
         const auto &x = slb_prev.front();
         if (x.q1 == 0 && x.q2 == 0){
-            if (x.time == 0){
-                if (x.op <= lui){
+            if (x.op <= lhu){
+                if (x.time == 0){
                     auto res = execute(x.op, x.imm, x.v1, x.v2, 0);
                     stall_slb_to_rob_nxt = false;
                     slb_to_rob_nxt = (ex_to_rob_type){x.rob_id, res};
@@ -419,17 +416,39 @@ void run_slbuffer(){
                     slb_to_slb_nxt = (ex_to_rs_or_slb_type){x.rob_id, res.first};
                     stall_slb_to_rs_nxt = false;
                     slb_to_rs_nxt = (ex_to_rs_or_slb_type){x.rob_id, res.first};
+                    slb_nxt.head = slb_prev.head % N_slb + 1, slb_nxt.size--;
+                } else slb_nxt.front().time--;
+            } else {
+                if (x.rob_id) {
+                    if (rob_prev[x.rob_id].stall) {
+                        stall_slb_to_rob_nxt = false;
+                        slb_to_rob_nxt = (ex_to_rob_type) {x.rob_id, pair<unsigned, pair<bool, unsigned>>()};
+                    }
                 } else {
-                    stall_slb_to_rob_nxt = false;
-                    slb_to_rob_nxt = (ex_to_rob_type){x.rob_id, pair<unsigned, pair<bool, unsigned>>()};
+                    if (x.time == 0){
+                        unsigned pos = x.v1 + x.imm, v2 = x.v2;
+                        switch (x.op) {
+                            case sb: mem[pos] = (unsigned char)get(v2, 0, 7); break;
+                            case sh: mem[pos] = (unsigned char)get(v2, 0, 7), mem[pos+1] = (unsigned char)get(v2, 8, 15); break;
+                            case sw:
+                                mem[pos] = (unsigned char)get(v2, 0, 7), mem[pos+1] = (unsigned char)get(v2, 8, 15);
+                                mem[pos+2] = (unsigned char)get(v2, 16, 23), mem[pos+3] = (unsigned char)get(v2, 24, 31);
+                                break;
+                            default: break;
+                        }
+                        slb_nxt.head = slb_prev.head % N_slb + 1, slb_nxt.size--;
+                    } else slb_nxt.front().time--;
                 }
-                slb_nxt.head = slb_prev.head % N_slb + 1, slb_nxt.size--;
-            } else slb_nxt.front().time--;
+            }
         }
     }
     if (!stall_clear_slb){
-        slb_nxt.head = slb_nxt.tail = 1, slb_nxt.size = 0;
-        stall_slb_to_rob_nxt = stall_slb_to_rs_nxt = true;
+        if (!slb_prev.front().rob_id && slb_prev.front().time) {
+            slb_nxt.tail = slb_prev.head % N_slb + 1, slb_nxt.size = 1;
+        } else {
+            slb_nxt.tail = slb_nxt.head = 1, slb_nxt.size = 0;
+        }
+        stall_slb_to_rob_nxt = stall_slb_to_rs_nxt = stall_slb_to_slb_nxt = true;
     }
 }
 void run_rob(){
@@ -473,16 +492,12 @@ void run_commit(){
     1. 根据ROB发出的信息更新寄存器的值，包括对应的ROB和是否被占用状态（注意考虑issue和commit同一个寄存器的情况）
     2. 遇到跳转指令更新pc值，并发出信号清空所有部分的信息存储（这条对于很多部分都有影响，需要慎重考虑）
     */
-    stall_commit_to_regfile = stall_clear_rs = stall_clear_slb = stall_clear_rob = stall_clear_fq = stall_clear_regtag = true;
+    stall_commit_to_regfile = stall_commit_to_slb = stall_clear_rs = stall_clear_slb = stall_clear_rob = stall_clear_fq = stall_clear_regtag = true;
     if (!stall_rob_to_commit){
         rob_to_commit_type &x = rob_to_commit;
-//        cout << hex << x.inst << endl;
-//        cout << dec << (unsigned)mem[99424] << ' ' << (x.rd == 15 ? x.res.first : reg_prev[15].reg) << endl;
-//        if (x.inst == 0x3ce7a023)
-//            cout << 1 << endl;
         if (x.op <= lhu || x.op >= lui && x.op <= jalr || x.op >= addi) {
             stall_commit_to_regfile = false;
-            commit_to_regfile = (commit_to_regfile_type) {x.op, x.rd, x.res.first};
+            commit_to_regfile = (commit_to_regfile_type) {x.op, x.rob_id, x.rd, x.res.first};
         }
         if (x.op >= jal && x.op <= bgeu){
             if (x.res.second.first){
@@ -491,9 +506,8 @@ void run_commit(){
             }
         }
         if (x.op >= sb && x.op <= sw){
-            stall_commit_to_regfile = false;
-            unsigned pos = slb_prev[x.slb_id].v1 + slb_prev[x.slb_id].imm, v2 = slb_prev[x.slb_id].v2;
-            commit_to_regfile = (commit_to_regfile_type) {x.op, pos, v2};
+            stall_commit_to_slb = false;
+            commit_to_slb = (commit_to_slb_type) {x.slb_id};
         }
     }
 }
