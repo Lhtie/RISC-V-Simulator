@@ -4,7 +4,7 @@
 #include "decode.hpp"
 #include "execute.hpp"
 
-const int N_reg = 32, N_fq = 32, N_rs = 32, N_rob = 32, N_slb = 32;
+const int N_reg = 32, N_fq = 32, N_rs = 32, N_rob = 64, N_slb = 32;
 extern unsigned char mem[500000];
 extern unsigned pc;
 
